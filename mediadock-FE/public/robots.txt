@@ -1,0 +1,10 @@
+User-agent: *
+Allow: /
+Disallow: /downloader
+Disallow: /history
+Disallow: /my-media
+Disallow: /converters
+Disallow: /settings
+
+Sitemap: https://mediadock.app/sitemap.xml
+

@@ -1,0 +1,460 @@
+openapi: 3.0.3
+info:
+  title: MediaDock REST API
+  version: 1.0.0
+  description: >
+    Authorized multi-platform media retrieval, processing, conversion, and download
+    management API for MediaDock. Supports official OAuth/API integrations and
+    user-owned media workflows with strict SSRF, file-type, and retention controls.
+servers:
+  - url: http://localhost:8080/api/v1
+    description: Local development server
+tags:
+  - name: Health
+  - name: Auth
+  - name: Media
+  - name: Downloads
+  - name: History
+  - name: Conversions
+  - name: Settings
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+    CookieAuth:
+      type: apiKey
+      in: cookie
+      name: mediadock_access
+  schemas:
+    APIError:
+      type: object
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        details:
+          type: object
+          additionalProperties:
+            type: string
+    PageMeta:
+      type: object
+      properties:
+        page:
+          type: integer
+        per_page:
+          type: integer
+        total:
+          type: integer
+        total_pages:
+          type: integer
+    RegisterRequest:
+      type: object
+      required: [name, email, password]
+      properties:
+        name:
+          type: string
+          minLength: 2
+          maxLength: 120
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          minLength: 8
+          maxLength: 72
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+    InspectMediaRequest:
+      type: object
+      required: [url]
+      properties:
+        url:
+          type: string
+          format: uri
+        access_token:
+          type: string
+          description: Per-request OAuth access token for authorized platform media
+        owner_attested:
+          type: boolean
+          description: Required true for direct user-owned media URLs
+    CreateDownloadRequest:
+      type: object
+      required: [media_id, requested_format]
+      properties:
+        media_id:
+          type: string
+          format: uuid
+        requested_format:
+          type: string
+          enum: [mp4, mov, mkv, webm, mp3, aac, m4a, wav, flac, ogg, jpg, jpeg, png, webp]
+        requested_quality:
+          type: string
+          enum: [original, 1080p, 720p, 480p, 360p, audio]
+        access_token:
+          type: string
+    UpdateSettingsRequest:
+      type: object
+      properties:
+        theme:
+          type: string
+          enum: [light, dark, system]
+        default_format:
+          type: string
+          enum: [mp4, mov, mkv, webm, mp3, aac, m4a, wav]
+security:
+  - BearerAuth: []
+  - CookieAuth: []
+paths:
+  /health:
+    get:
+      tags: [Health]
+      security: []
+      summary: Liveness check
+      responses:
+        "200":
+          description: API is alive
+  /ready:
+    get:
+      tags: [Health]
+      security: []
+      summary: Readiness check (PostgreSQL and Redis)
+      responses:
+        "200":
+          description: Dependencies ready
+        "503":
+          description: One or more dependencies unavailable
+  /auth/register:
+    post:
+      tags: [Auth]
+      security: []
+      summary: Register a new user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegisterRequest"
+      responses:
+        "201":
+          description: User registered and tokens issued
+        "409":
+          description: Email already registered
+        "422":
+          description: Validation error
+  /auth/login:
+    post:
+      tags: [Auth]
+      security: []
+      summary: Authenticate user and issue JWT + HttpOnly cookies
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+      responses:
+        "200":
+          description: Authenticated
+        "401":
+          description: Invalid credentials
+  /auth/refresh:
+    post:
+      tags: [Auth]
+      security: []
+      summary: Rotate refresh token and issue a new token pair
+      responses:
+        "200":
+          description: Refreshed tokens
+        "401":
+          description: Invalid or revoked refresh token
+  /auth/logout:
+    post:
+      tags: [Auth]
+      summary: Revoke active access/refresh tokens and clear cookies
+      responses:
+        "200":
+          description: Logged out
+  /auth/me:
+    get:
+      tags: [Auth]
+      summary: Get authenticated user profile
+      responses:
+        "200":
+          description: User profile
+    put:
+      tags: [Auth]
+      summary: Update authenticated user display name
+      responses:
+        "200":
+          description: Updated profile
+  /media:
+    get:
+      tags: [Media]
+      summary: List user's inspected media items (paginated)
+      responses:
+        "200":
+          description: Paginated media list
+  /media/inspect:
+    post:
+      tags: [Media]
+      summary: Validate URL, verify authorization, and inspect metadata & formats
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/InspectMediaRequest"
+      responses:
+        "200":
+          description: Inspected media metadata and available formats
+        "400":
+          description: Invalid or SSRF-blocked URL
+        "401":
+          description: Platform authorization token required
+        "403":
+          description: Unauthorized media or missing ownership attestation
+        "501":
+          description: Platform integration planned / not yet enabled
+  /media/{id}:
+    get:
+      tags: [Media]
+      summary: Get inspected media item details
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Media item
+        "404":
+          description: Not found
+    delete:
+      tags: [Media]
+      summary: Delete saved media item
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Deleted
+  /downloads:
+    get:
+      tags: [Downloads]
+      summary: List user's download jobs (paginated)
+      responses:
+        "200":
+          description: Paginated download jobs
+    post:
+      tags: [Downloads]
+      summary: Create an asynchronous authorized download job
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateDownloadRequest"
+      responses:
+        "202":
+          description: Job queued
+  /downloads/{id}:
+    get:
+      tags: [Downloads]
+      summary: Get download job details
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Download job
+    delete:
+      tags: [Downloads]
+      summary: Delete download job and stored artifact
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Deleted
+  /downloads/{id}/status:
+    get:
+      tags: [Downloads]
+      summary: Poll download job status and progress
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Job status and progress
+  /downloads/{id}/file:
+    get:
+      tags: [Downloads]
+      summary: Download completed media artifact (or obtain S3 signed URL)
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: File stream or presigned download URL
+        "409":
+          description: Job not completed yet
+        "410":
+          description: Download artifact expired
+  /history:
+    get:
+      tags: [History]
+      summary: List user's download history (paginated)
+      responses:
+        "200":
+          description: Paginated download history
+  /history/{id}:
+    get:
+      tags: [History]
+      summary: Get single download history record
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: History record
+    delete:
+      tags: [History]
+      summary: Delete a download history record
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Deleted
+  /conversions:
+    post:
+      tags: [Conversions]
+      summary: Upload local authorized media file and queue FFmpeg conversion
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file, target_format]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                target_format:
+                  type: string
+                target_resolution:
+                  type: string
+                compress:
+                  type: boolean
+                extract_audio:
+                  type: boolean
+      responses:
+        "202":
+          description: Conversion job queued
+        "413":
+          description: File exceeds MAX_FILE_SIZE
+        "415":
+          description: Unsupported or unsafe file signature
+  /conversions/{id}:
+    get:
+      tags: [Conversions]
+      summary: Get conversion job details
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Conversion job
+  /conversions/{id}/status:
+    get:
+      tags: [Conversions]
+      summary: Poll conversion job status and progress
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Conversion job status
+  /conversions/{id}/file:
+    get:
+      tags: [Conversions]
+      summary: Download converted media artifact
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Converted file stream
+  /settings:
+    get:
+      tags: [Settings]
+      summary: Get user settings
+      responses:
+        "200":
+          description: User settings
+    put:
+      tags: [Settings]
+      summary: Update user settings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateSettingsRequest"
+      responses:
+        "200":
+          description: Updated settings
+

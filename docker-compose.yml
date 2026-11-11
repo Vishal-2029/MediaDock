@@ -1,0 +1,96 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: mediadock-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-mediadock}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-mediadock_dev_password}
+      POSTGRES_DB: ${POSTGRES_DB:-mediadock}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-mediadock} -d ${POSTGRES_DB:-mediadock}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: mediadock-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build:
+      context: ./mediadock-BE
+      dockerfile: Dockerfile
+    container_name: mediadock-api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "${APP_PORT:-8080}:8080"
+    environment:
+      APP_ENV: ${APP_ENV:-development}
+      APP_PORT: 8080
+      DATABASE_URL: postgres://${POSTGRES_USER:-mediadock}:${POSTGRES_PASSWORD:-mediadock_dev_password}@postgres:5432/${POSTGRES_DB:-mediadock}?sslmode=disable
+      REDIS_URL: redis://redis:6379/0
+      JWT_SECRET: ${JWT_SECRET:-change-this-to-a-long-random-secret-at-least-32-chars}
+      JWT_ACCESS_TTL: ${JWT_ACCESS_TTL:-15m}
+      JWT_REFRESH_TTL: ${JWT_REFRESH_TTL:-168h}
+      STORAGE_TYPE: ${STORAGE_TYPE:-local}
+      STORAGE_PATH: /app/storage_data
+      LOCAL_SIGNING_SECRET: ${LOCAL_SIGNING_SECRET:-change-this-signing-secret-in-production}
+      S3_BUCKET: ${S3_BUCKET:-}
+      S3_REGION: ${S3_REGION:-us-east-1}
+      S3_ENDPOINT: ${S3_ENDPOINT:-}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-}
+      MAX_FILE_SIZE: ${MAX_FILE_SIZE:-524288000}
+      MAX_PROCESSING_TIME: ${MAX_PROCESSING_TIME:-300s}
+      JOB_RETENTION_TTL: ${JOB_RETENTION_TTL:-24h}
+      HISTORY_RETENTION_DAYS: ${HISTORY_RETENTION_DAYS:-90}
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-4}
+      JOB_MAX_RETRIES: ${JOB_MAX_RETRIES:-3}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:3000,http://localhost:5173}
+      RATE_LIMIT_MAX: ${RATE_LIMIT_MAX:-100}
+      RATE_LIMIT_WINDOW: ${RATE_LIMIT_WINDOW:-1m}
+      INSTAGRAM_GRAPH_API_BASE: ${INSTAGRAM_GRAPH_API_BASE:-https://graph.instagram.com}
+      INSTAGRAM_APP_ID: ${INSTAGRAM_APP_ID:-}
+      INSTAGRAM_ACCESS_TOKEN: ${INSTAGRAM_ACCESS_TOKEN:-}
+    volumes:
+      - mediadock_storage:/app/storage_data
+
+  web:
+    build:
+      context: ./mediadock-FE
+      dockerfile: Dockerfile
+      args:
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8080/api/v1}
+    container_name: mediadock-web
+    restart: unless-stopped
+    depends_on:
+      - api
+    ports:
+      - "${WEB_PORT:-5173}:80"
+
+volumes:
+  postgres_data:
+  redis_data:
+  mediadock_storage:
+
