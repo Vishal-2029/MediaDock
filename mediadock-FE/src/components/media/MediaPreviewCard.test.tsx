@@ -44,4 +44,26 @@ describe('MediaPreviewCard', () => {
     expect(onStartDownload).toHaveBeenCalledTimes(1);
     expect(onStartDownload).toHaveBeenCalledWith('mp3', 'audio');
   });
+
+  it('disables download and shows compliance guidance for preview-only media', () => {
+    const onStartDownload = vi.fn();
+    const previewOnlyMedia: MediaInspectResponse = {
+      ...sampleMedia,
+      downloadable: false,
+      download_blocked_reason: 'Public oEmbed preview only; licensed download requires creator OAuth.',
+      available_formats: [],
+      authorization: {
+        authorized: false,
+        preview_only: true,
+        authorization_method: 'meta_oembed',
+        reason: 'Public oEmbed preview only; licensed download requires creator OAuth.',
+      },
+    };
+
+    render(<MediaPreviewCard media={previewOnlyMedia} onStartDownload={onStartDownload} />);
+
+    expect(screen.getByText('Preview Only')).toBeInTheDocument();
+    expect(screen.getByText(/Public oEmbed preview only/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /download media/i })).toBeDisabled();
+  });
 });

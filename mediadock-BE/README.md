@@ -20,7 +20,8 @@ MediaDock uses a **modular monolith** architecture with strict separation betwee
   - `history`: Download audit history, paginated listing, and retention policy cleanup.
   - `storage`: Local filesystem storage (with HMAC signed URLs and path-traversal protection) and S3-compatible production storage (`aws-sdk-go-v2` with presigned URLs).
 - **Platform Integrations (`internal/platform/*`)**:
-  - `instagram`: Official Meta Instagram Graph API integration (`OAuth` Bearer token verification + `/me/media` lookup). No HTML scraping or cookie harvesting.
+  - `instagram`: Official Meta Instagram Graph API integration (`OAuth` Bearer token verification + `/me/media` lookup) plus optional official `/instagram_oembed` preview support when `INSTAGRAM_APP_ID` and `INSTAGRAM_APP_SECRET` are configured. No HTML scraping or cookie harvesting.
+  - `external`: Optional commercially licensed third-party media resolution API adapter configured via `EXTERNAL_MEDIA_API_BASE` and `EXTERNAL_MEDIA_API_KEY` (with SSRF + size checks).
   - `generic`: Authorized direct media URLs with explicit `owner_attested=true` confirmation and strict SSRF + MIME checks.
   - `youtube`, `facebook`: Future-ready compliant stubs returning `501 Not Implemented` with official export/upload alternatives.
 - **Background Worker (`internal/queue`)**: Redis-backed job queue (`RPUSH`/`BLPOP`) with configurable concurrency, per-job timeouts, retry backoff, dead-letter queue (`mediadock:jobs:dlq`), and periodic expiration/retention cleanup.
@@ -128,7 +129,8 @@ MediaDock strictly enforces authorized access:
 - `POST /api/v1/conversions` — Multipart file upload (`file`, `target_format`, `target_resolution`, `compress`, `extract_audio`) queued for FFmpeg processing (`202 Accepted`)
 - `GET /api/v1/conversions/:id` — Get conversion job details (`200 OK`)
 - `GET /api/v1/conversions/:id/status` — Poll conversion status & progress (`200 OK`)
-- `GET /api/v1/conversions/:id/file` — Stream converted output file (`200 OK`)
+- `GET /api/v1/conversions/:id/file` — Stream converted output file or S3 presigned URL (`200 OK`)
+- `GET /api/v1/conversions/:id/thumbnail` — Stream generated JPEG thumbnail for video conversions (`200 OK`)
 
 ### History & Settings
 - `GET /api/v1/history?page=1&per_page=20` — Paginated download history (`200 OK`)
