@@ -28,12 +28,20 @@ type Provider struct {
 	graphAPIBase string
 	httpClient   *http.Client
 	defaultToken string
+	appID        string
+	appSecret    string
 	allowCustom  bool // enabled only in tests when pointing to a mock Graph API server
 }
 
 // SetDefaultToken configures an optional server-side Instagram Graph API token for creator-owned media.
 func (p *Provider) SetDefaultToken(token string) {
 	p.defaultToken = strings.TrimSpace(token)
+}
+
+// SetAppCredentials configures Meta App ID and App Secret for optional official oEmbed public previews.
+func (p *Provider) SetAppCredentials(appID, appSecret string) {
+	p.appID = strings.TrimSpace(appID)
+	p.appSecret = strings.TrimSpace(appSecret)
 }
 
 func (p *Provider) resolveToken(perRequest string) string {
@@ -83,12 +91,16 @@ func (p *Provider) CanHandle(rawURL string) bool {
 }
 
 func (p *Provider) ValidateURL(rawURL string) (*url.URL, error) {
+	return p.validateURLWithContext(context.Background(), rawURL)
+}
+
+func (p *Provider) validateURLWithContext(ctx context.Context, rawURL string) (*url.URL, error) {
 	var parsed *url.URL
 	var err error
 	if p.allowCustom {
 		parsed, err = url.Parse(strings.TrimSpace(rawURL))
 	} else {
-		parsed, err = utils.ValidatePublicURL(context.Background(), rawURL, false)
+		parsed, err = utils.ValidatePublicURL(ctx, rawURL, false)
 	}
 	if err != nil {
 		return nil, err

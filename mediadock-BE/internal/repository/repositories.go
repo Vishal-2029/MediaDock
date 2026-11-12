@@ -27,6 +27,7 @@ type MediaRepository interface {
 	CreateSourceAndItem(ctx context.Context, source *MediaSource, item *MediaItem) error
 	FindItemByID(ctx context.Context, id, userID uuid.UUID) (*MediaItem, error)
 	ListItemsByUser(ctx context.Context, userID uuid.UUID, offset, limit int) ([]MediaItem, int64, error)
+	UpdateItemDuration(ctx context.Context, id uuid.UUID, duration int) error
 	DeleteItem(ctx context.Context, id, userID uuid.UUID) error
 }
 
@@ -47,6 +48,7 @@ type ConversionJobRepository interface {
 	FindByID(ctx context.Context, id, userID uuid.UUID) (*ConversionJob, error)
 	FindByIDSystem(ctx context.Context, id uuid.UUID) (*ConversionJob, error)
 	UpdateStatus(ctx context.Context, id uuid.UUID, status JobStatus, progress int, outputPath, errMsg string, fileSize int64, duration int, expiresAt *time.Time) error
+	UpdateThumbnailPath(ctx context.Context, id uuid.UUID, thumbnailPath string) error
 	FindExpired(ctx context.Context, now time.Time) ([]ConversionJob, error)
 }
 
@@ -167,7 +169,13 @@ func (r *GormMediaRepository) CreateSourceAndItem(ctx context.Context, source *M
 			return err
 		}
 		item.SourceID = source.ID
-		return tx.Create(item).Error
+		if err := tx.Create(item).Error; err != nil {
+			return err
+		}
+		if !item.Downloadable {
+			return tx.Model(item).Update("downloadable", false).Error
+		}
+		return nil
 	})
 }
 
@@ -203,6 +211,13 @@ func (r *GormMediaRepository) DeleteItem(ctx context.Context, id, userID uuid.UU
 		return ErrNotFound
 	}
 	return nil
+}
+
+func (r *GormMediaRepository) UpdateItemDuration(ctx context.Context, id uuid.UUID, duration int) error {
+	return r.db.WithContext(ctx).Model(&MediaItem{}).Where("id = ?", id).Updates(map[string]interface{}{
+		"duration":   duration,
+		"updated_at": time.Now().UTC(),
+	}).Error
 }
 
 // GormDownloadJobRepository implements DownloadJobRepository using GORM.
@@ -360,6 +375,13 @@ func (r *GormConversionJobRepository) UpdateStatus(
 		updates["expires_at"] = expiresAt
 	}
 	return r.db.WithContext(ctx).Model(&ConversionJob{}).Where("id = ?", id).Updates(updates).Error
+}
+
+func (r *GormConversionJobRepository) UpdateThumbnailPath(ctx context.Context, id uuid.UUID, thumbnailPath string) error {
+	return r.db.WithContext(ctx).Model(&ConversionJob{}).Where("id = ?", id).Updates(map[string]interface{}{
+		"thumbnail_path": thumbnailPath,
+		"updated_at":     time.Now().UTC(),
+	}).Error
 }
 
 func (r *GormConversionJobRepository) FindExpired(ctx context.Context, now time.Time) ([]ConversionJob, error) {

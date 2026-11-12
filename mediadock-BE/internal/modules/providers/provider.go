@@ -55,6 +55,7 @@ type AuthCheckRequest struct {
 // AuthorizationResult reports the outcome of authorization verification.
 type AuthorizationResult struct {
 	Authorized          bool      `json:"authorized"`
+	PreviewOnly         bool      `json:"preview_only,omitempty"`
 	AuthorizationMethod string    `json:"authorization_method"`
 	AccountIdentifier   string    `json:"account_identifier,omitempty"`
 	MediaIdentifier     string    `json:"media_identifier,omitempty"`
@@ -130,5 +131,11 @@ type Provider interface {
 	ListFormats(ctx context.Context, meta *MediaMetadata) ([]FormatOption, error)
 	RetrieveMedia(ctx context.Context, req RetrievalRequest) (*RetrievedMedia, error)
 	MapError(err error) *ProviderError
+}
+
+// PreviewProvider is optionally implemented by providers that can fetch public
+// preview metadata (title, thumbnail, author) even when raw file download is not permitted.
+type PreviewProvider interface {
+	FetchPublicPreview(ctx context.Context, rawURL string) (*MediaMetadata, *AuthorizationResult, error)
 }
 

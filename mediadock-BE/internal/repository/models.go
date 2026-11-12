@@ -53,18 +53,21 @@ func (m *MediaSource) BeforeCreate(_ *gorm.DB) error {
 	return nil
 }
 
-// MediaItem holds inspected metadata for an authorized media resource.
+// MediaItem holds inspected metadata for an authorized or previewable media resource.
 type MediaItem struct {
-	ID             uuid.UUID    `gorm:"type:uuid;primaryKey" json:"id"`
-	UserID         uuid.UUID    `gorm:"type:uuid;index;not null" json:"user_id"`
-	SourceID       uuid.UUID    `gorm:"type:uuid;index;not null" json:"source_id"`
-	Source         *MediaSource `gorm:"foreignKey:SourceID" json:"source,omitempty"`
-	Title          string       `gorm:"size:500;not null" json:"title"`
-	ThumbnailURL   string       `gorm:"type:text" json:"thumbnail_url"`
-	Duration       int          `gorm:"not null;default:0" json:"duration"`
-	OriginalFormat string       `gorm:"size:32;not null" json:"original_format"`
-	FileSize       int64        `gorm:"not null;default:0" json:"file_size"`
-	CreatedAt      time.Time    `json:"created_at"`
+	ID                    uuid.UUID    `gorm:"type:uuid;primaryKey" json:"id"`
+	UserID                uuid.UUID    `gorm:"type:uuid;index;not null" json:"user_id"`
+	SourceID              uuid.UUID    `gorm:"type:uuid;index;not null" json:"source_id"`
+	Source                *MediaSource `gorm:"foreignKey:SourceID" json:"source,omitempty"`
+	Title                 string       `gorm:"size:500;not null" json:"title"`
+	MediaType             string       `gorm:"size:16;not null;default:video" json:"media_type"`
+	ThumbnailURL          string       `gorm:"type:text" json:"thumbnail_url"`
+	Duration              int          `gorm:"not null;default:0" json:"duration"`
+	OriginalFormat        string       `gorm:"size:32;not null" json:"original_format"`
+	FileSize              int64        `gorm:"not null;default:0" json:"file_size"`
+	Downloadable          bool         `gorm:"not null" json:"downloadable"`
+	DownloadBlockedReason string       `gorm:"type:text" json:"download_blocked_reason,omitempty"`
+	CreatedAt             time.Time    `json:"created_at"`
 }
 
 func (m *MediaItem) BeforeCreate(_ *gorm.DB) error {
@@ -152,6 +155,7 @@ type ConversionJob struct {
 	Progress         int        `gorm:"not null;default:0" json:"progress"`
 	InputPath        string     `gorm:"type:text;not null" json:"-"`
 	OutputPath       string     `gorm:"type:text" json:"-"`
+	ThumbnailPath    string     `gorm:"type:text" json:"-"`
 	FileSize         int64      `gorm:"not null;default:0" json:"file_size"`
 	Duration         int        `gorm:"not null;default:0" json:"duration"`
 	ErrorMessage     string     `gorm:"type:text" json:"error_message,omitempty"`
