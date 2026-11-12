@@ -50,6 +50,9 @@ func (h *Handler) Create(c *fiber.Ctx) error {
 		if errors.Is(err, repository.ErrNotFound) {
 			return utils.JSONError(c, fiber.StatusNotFound, "MEDIA_NOT_FOUND", "inspected media item not found")
 		}
+		if errors.Is(err, ErrPreviewOnly) {
+			return utils.JSONError(c, fiber.StatusForbidden, "PREVIEW_ONLY_MEDIA", err.Error())
+		}
 		return utils.JSONError(c, fiber.StatusInternalServerError, "DOWNLOAD_CREATE_FAILED", "could not create download job")
 	}
 

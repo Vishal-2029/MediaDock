@@ -22,6 +22,7 @@ import (
 	"github.com/mediadock/backend/internal/modules/providers"
 	"github.com/mediadock/backend/internal/modules/storage"
 	"github.com/mediadock/backend/internal/modules/users"
+	"github.com/mediadock/backend/internal/platform/external"
 	"github.com/mediadock/backend/internal/platform/facebook"
 	"github.com/mediadock/backend/internal/platform/generic"
 	"github.com/mediadock/backend/internal/platform/instagram"
@@ -52,8 +53,16 @@ func BuildDefaultRegistry(cfg *config.Config) (*providers.Registry, error) {
 	reg := providers.NewRegistry()
 	safeClient := utils.NewSafeHTTPClient(60*time.Second, 5)
 
+	extProvider := external.NewProvider(cfg.ExternalMediaAPIBase, cfg.ExternalMediaAPIKey, safeClient)
+	if extProvider.Enabled() {
+		if err := reg.Register(extProvider); err != nil {
+			return nil, err
+		}
+	}
+
 	igProvider := instagram.NewProvider(cfg.InstagramGraphBase, safeClient)
 	igProvider.SetDefaultToken(cfg.InstagramAccessToken)
+	igProvider.SetAppCredentials(cfg.InstagramAppID, cfg.InstagramAppSecret)
 	if err := reg.Register(igProvider); err != nil {
 		return nil, err
 	}
@@ -72,11 +81,14 @@ func BuildDefaultRegistry(cfg *config.Config) (*providers.Registry, error) {
 // NewApp wires all repositories, services, handlers, middlewares, and /api/v1 routes into a Fiber app.
 func NewApp(deps *Dependencies) *fiber.App {
 	app := fiber.New(fiber.Config{
-		AppName:      "MediaDock API",
-		BodyLimit:    int(deps.Config.MaxFileSize),
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 60 * time.Second,
-		IdleTimeout:  60 * time.Second,
+		AppName:                 "MediaDock API",
+		BodyLimit:               int(deps.Config.MaxFileSize),
+		ReadTimeout:             30 * time.Second,
+		WriteTimeout:            60 * time.Second,
+		IdleTimeout:             60 * time.Second,
+		ProxyHeader:             fiber.HeaderXForwardedFor,
+		EnableTrustedProxyCheck: len(deps.Config.TrustedProxies) > 0,
+		TrustedProxies:          deps.Config.TrustedProxies,
 		ErrorHandler: func(c *fiber.Ctx, err error) error {
 			code := fiber.StatusInternalServerError
 			msg := "internal server error"
@@ -109,6 +121,9 @@ func NewApp(deps *Dependencies) *fiber.App {
 	authSvc := auth.NewService(userRepo, deps.Redis, deps.Config)
 	usersSvc := users.NewService(userRepo)
 	mediaSvc := media.NewService(mediaRepo, deps.Registry)
+	if deps.Redis != nil {
+		mediaSvc.SetCache(deps.Redis, 10*time.Minute)
+	}
 	historySvc := history.NewService(historyRepo, deps.Config.HistoryRetentionDays, deps.Logger)
 	downloaderSvc := downloader.NewService(
 		downloadRepo,
@@ -135,6 +150,7 @@ func NewApp(deps *Dependencies) *fiber.App {
 	deps.ConversionService = conversionSvc
 
 	if deps.Queue != nil {
+		deps.Queue.SetTokenSecret(deps.Config.LocalSigningSecret)
 		deps.Queue.RegisterHandler(queue.JobTypeDownload, downloaderSvc.ProcessJob)
 		deps.Queue.RegisterHandler(queue.JobTypeConversion, conversionSvc.ProcessJob)
 	}
@@ -222,6 +238,7 @@ func NewApp(deps *Dependencies) *fiber.App {
 	convGroup.Get("/:id", conversionHandler.GetByID)
 	convGroup.Get("/:id/status", conversionHandler.GetStatus)
 	convGroup.Get("/:id/file", conversionHandler.GetFile)
+	convGroup.Get("/:id/thumbnail", conversionHandler.GetThumbnail)
 
 	// Settings routes
 	settingsGroup := v1.Group("/settings", workspaceAuth)

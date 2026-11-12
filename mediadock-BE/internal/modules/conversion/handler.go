@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/mediadock/backend/internal/modules/auth"
 	"github.com/mediadock/backend/internal/modules/processing"
+	"github.com/mediadock/backend/internal/modules/storage"
 	"github.com/mediadock/backend/internal/repository"
 	"github.com/mediadock/backend/internal/utils"
 )
@@ -128,10 +129,10 @@ func (h *Handler) GetFile(c *fiber.Ctx) error {
 		return utils.JSONError(c, fiber.StatusBadRequest, "INVALID_ID", "invalid conversion job ID")
 	}
 
-	reader, size, fileName, err := h.service.OpenOutput(c.UserContext(), id, userID)
+	res, err := h.service.OpenOutput(c.UserContext(), id, userID)
 	if err != nil {
 		switch {
-		case errors.Is(err, repository.ErrNotFound):
+		case errors.Is(err, repository.ErrNotFound), errors.Is(err, storage.ErrObjectNotFound):
 			return utils.JSONError(c, fiber.StatusNotFound, "CONVERSION_NOT_FOUND", "conversion job not found")
 		case errors.Is(err, ErrConversionExpired):
 			return utils.JSONError(c, fiber.StatusGone, "CONVERSION_EXPIRED", err.Error())
@@ -142,8 +143,48 @@ func (h *Handler) GetFile(c *fiber.Ctx) error {
 		}
 	}
 
-	c.Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, fileName))
+	if res.SignedURL != "" {
+		return utils.JSONSuccess(c, fiber.StatusOK, fiber.Map{
+			"file_name":    res.FileName,
+			"download_url": res.SignedURL,
+		})
+	}
+
+	c.Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, res.FileName))
 	c.Set("Content-Type", "application/octet-stream")
-	return c.SendStream(reader, int(size))
+	return c.SendStream(res.Reader, int(res.Size))
+}
+
+// GetThumbnail handles GET /api/v1/conversions/:id/thumbnail.
+func (h *Handler) GetThumbnail(c *fiber.Ctx) error {
+	userID, ok := auth.UserIDFromContext(c)
+	if !ok {
+		return utils.JSONError(c, fiber.StatusUnauthorized, "UNAUTHORIZED", "authentication required")
+	}
+
+	id, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return utils.JSONError(c, fiber.StatusBadRequest, "INVALID_ID", "invalid conversion job ID")
+	}
+
+	res, err := h.service.OpenThumbnail(c.UserContext(), id, userID)
+	if err != nil {
+		switch {
+		case errors.Is(err, repository.ErrNotFound), errors.Is(err, ErrThumbnailNotFound), errors.Is(err, storage.ErrObjectNotFound):
+			return utils.JSONError(c, fiber.StatusNotFound, "THUMBNAIL_NOT_FOUND", "conversion thumbnail not found")
+		case errors.Is(err, ErrConversionExpired):
+			return utils.JSONError(c, fiber.StatusGone, "CONVERSION_EXPIRED", err.Error())
+		default:
+			return utils.JSONError(c, fiber.StatusInternalServerError, "THUMBNAIL_FAILED", "could not retrieve conversion thumbnail")
+		}
+	}
+
+	if res.SignedURL != "" {
+		return c.Redirect(res.SignedURL, fiber.StatusTemporaryRedirect)
+	}
+
+	c.Set("Content-Type", "image/jpeg")
+	c.Set("Cache-Control", "private, max-age=3600")
+	return c.SendStream(res.Reader, int(res.Size))
 }
 

@@ -23,9 +23,10 @@ import (
 )
 
 var (
-	ErrJobNotReady  = errors.New("download job is not completed yet")
-	ErrJobExpired   = errors.New("download job has expired")
+	ErrJobNotReady   = errors.New("download job is not completed yet")
+	ErrJobExpired    = errors.New("download job has expired")
 	ErrInvalidFormat = errors.New("requested format or quality is not supported")
+	ErrPreviewOnly   = errors.New("this media item is preview-only and cannot be downloaded without authorization")
 )
 
 // CreateDownloadRequest represents POST /api/v1/downloads.
@@ -97,6 +98,9 @@ func (s *Service) CreateJob(ctx context.Context, userID uuid.UUID, req CreateDow
 	item, err := s.mediaRepo.FindItemByID(ctx, req.MediaID, userID)
 	if err != nil {
 		return nil, err
+	}
+	if !item.Downloadable {
+		return nil, ErrPreviewOnly
 	}
 
 	quality := strings.ToLower(strings.TrimSpace(req.RequestedQuality))
@@ -231,6 +235,12 @@ func (s *Service) ProcessJob(ctx context.Context, payload queue.JobPayload) erro
 	}
 
 	_ = s.jobs.UpdateStatus(ctx, job.ID, repository.JobStatusProcessing, 85, "", "", nil)
+
+	if s.processor != nil && s.mediaRepo != nil && (job.Media == nil || job.Media.Duration == 0) {
+		if probe, probeErr := s.processor.InspectMetadata(ctx, finalLocalPath); probeErr == nil && probe != nil && probe.DurationSeconds > 0 {
+			_ = s.mediaRepo.UpdateItemDuration(ctx, job.MediaID, probe.DurationSeconds)
+		}
+	}
 
 	storageKey := filepath.ToSlash(filepath.Join("downloads", job.UserID.String(), job.ID.String()+"."+targetExt))
 	savedKey, err := s.store.SaveFile(ctx, storageKey, finalLocalPath, retrieved.ContentType)

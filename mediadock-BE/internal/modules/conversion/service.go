@@ -23,7 +23,16 @@ import (
 var (
 	ErrConversionNotReady = errors.New("conversion job is not completed yet")
 	ErrConversionExpired  = errors.New("conversion job has expired")
+	ErrThumbnailNotFound  = errors.New("conversion thumbnail is not available")
 )
+
+// ConversionFileResult wraps an open output/thumbnail stream or S3 signed URL.
+type ConversionFileResult struct {
+	Reader    io.ReadCloser
+	Size      int64
+	FileName  string
+	SignedURL string
+}
 
 // CreateConversionRequest captures options for a user-uploaded media conversion.
 type CreateConversionRequest struct {
@@ -246,6 +255,21 @@ func (s *Service) ProcessJob(ctx context.Context, payload queue.JobPayload) erro
 		return err
 	}
 
+	// Best-effort thumbnail extraction for video outputs.
+	if !job.ExtractAudio && !processing.SupportedAudioFormats[strings.ToLower(job.TargetFormat)] {
+		if thumbTemp, thumbErr := utils.CreateSafeTempFile(s.store.TempDir(), "conv-thumb-"+job.ID.String(), ".jpg"); thumbErr == nil {
+			thumbLocalPath := thumbTemp.Name()
+			_ = thumbTemp.Close()
+			if genErr := s.processor.GenerateThumbnail(ctx, outPath, thumbLocalPath); genErr == nil {
+				thumbKey := filepath.ToSlash(filepath.Join("conversions", job.UserID.String(), job.ID.String()+"-thumb.jpg"))
+				if _, saveErr := s.store.SaveFile(ctx, thumbKey, thumbLocalPath, "image/jpeg"); saveErr == nil {
+					_ = s.jobs.UpdateThumbnailPath(ctx, job.ID, thumbKey)
+				}
+			}
+			_ = os.Remove(thumbLocalPath)
+		}
+	}
+
 	// Clean up raw input copy once conversion succeeded.
 	_ = s.store.Delete(ctx, job.InputPath)
 
@@ -253,30 +277,87 @@ func (s *Service) ProcessJob(ctx context.Context, payload queue.JobPayload) erro
 	return s.jobs.UpdateStatus(ctx, job.ID, repository.JobStatusCompleted, 100, outKey, "", info.Size(), duration, &expiresAt)
 }
 
-// OpenOutput opens the converted output artifact for download.
-func (s *Service) OpenOutput(ctx context.Context, id, userID uuid.UUID) (io.ReadCloser, int64, string, error) {
+// OpenOutput opens the converted output artifact for download or generates an S3 signed URL.
+func (s *Service) OpenOutput(ctx context.Context, id, userID uuid.UUID) (*ConversionFileResult, error) {
 	job, err := s.jobs.FindByID(ctx, id, userID)
 	if err != nil {
-		return nil, 0, "", err
+		return nil, err
 	}
 	if job.Status == repository.JobStatusExpired || (job.ExpiresAt != nil && time.Now().UTC().After(*job.ExpiresAt)) {
 		_ = s.jobs.UpdateStatus(ctx, job.ID, repository.JobStatusExpired, job.Progress, "", "conversion expired", job.FileSize, job.Duration, job.ExpiresAt)
 		if job.OutputPath != "" {
 			_ = s.store.Delete(ctx, job.OutputPath)
 		}
-		return nil, 0, "", ErrConversionExpired
+		if job.ThumbnailPath != "" {
+			_ = s.store.Delete(ctx, job.ThumbnailPath)
+		}
+		return nil, ErrConversionExpired
 	}
 	if job.Status != repository.JobStatusCompleted || job.OutputPath == "" {
-		return nil, 0, "", ErrConversionNotReady
+		return nil, ErrConversionNotReady
+	}
+
+	base := strings.TrimSuffix(job.SourceFilename, filepath.Ext(job.SourceFilename))
+	fileName := fmt.Sprintf("%s.%s", base, job.TargetFormat)
+
+	if s.cfg.StorageType == "s3" {
+		signed, err := s.store.SignedURL(ctx, job.OutputPath, 15*time.Minute)
+		if err != nil {
+			return nil, err
+		}
+		return &ConversionFileResult{
+			FileName:  fileName,
+			SignedURL: signed,
+		}, nil
 	}
 
 	reader, size, err := s.store.Open(ctx, job.OutputPath)
 	if err != nil {
-		return nil, 0, "", err
+		return nil, err
 	}
+	return &ConversionFileResult{
+		Reader:   reader,
+		Size:     size,
+		FileName: fileName,
+	}, nil
+}
+
+// OpenThumbnail opens the generated JPEG thumbnail for a completed video conversion.
+func (s *Service) OpenThumbnail(ctx context.Context, id, userID uuid.UUID) (*ConversionFileResult, error) {
+	job, err := s.jobs.FindByID(ctx, id, userID)
+	if err != nil {
+		return nil, err
+	}
+	if job.Status == repository.JobStatusExpired || (job.ExpiresAt != nil && time.Now().UTC().After(*job.ExpiresAt)) {
+		return nil, ErrConversionExpired
+	}
+	if job.ThumbnailPath == "" {
+		return nil, ErrThumbnailNotFound
+	}
+
 	base := strings.TrimSuffix(job.SourceFilename, filepath.Ext(job.SourceFilename))
-	fileName := fmt.Sprintf("%s.%s", base, job.TargetFormat)
-	return reader, size, fileName, nil
+	fileName := fmt.Sprintf("%s-thumb.jpg", base)
+
+	if s.cfg.StorageType == "s3" {
+		signed, err := s.store.SignedURL(ctx, job.ThumbnailPath, 15*time.Minute)
+		if err != nil {
+			return nil, err
+		}
+		return &ConversionFileResult{
+			FileName:  fileName,
+			SignedURL: signed,
+		}, nil
+	}
+
+	reader, size, err := s.store.Open(ctx, job.ThumbnailPath)
+	if err != nil {
+		return nil, err
+	}
+	return &ConversionFileResult{
+		Reader:   reader,
+		Size:     size,
+		FileName: fileName,
+	}, nil
 }
 
 // CleanupExpired expires past-due conversion jobs and deletes their artifacts.
@@ -289,6 +370,9 @@ func (s *Service) CleanupExpired(ctx context.Context) (int, error) {
 	for _, job := range expired {
 		if job.OutputPath != "" {
 			_ = s.store.Delete(ctx, job.OutputPath)
+		}
+		if job.ThumbnailPath != "" {
+			_ = s.store.Delete(ctx, job.ThumbnailPath)
 		}
 		if job.InputPath != "" {
 			_ = s.store.Delete(ctx, job.InputPath)
