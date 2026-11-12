@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Download, ShieldCheck, Clock, HardDrive, Film } from 'lucide-react';
+import { Download, ShieldCheck, Info, Clock, HardDrive, Film } from 'lucide-react';
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '@/components/common/Card';
 import { Button } from '@/components/common/Button';
 import { Label, Select } from '@/components/common/Input';
@@ -64,10 +64,15 @@ export function MediaPreviewCard({ media, onStartDownload, isSubmitting }: Media
             <CardHeader className="pb-2">
               <div className="flex flex-wrap items-center gap-2">
                 <PlatformBadge provider={media.provider} />
-                {media.authorization?.authorized && (
+                {media.authorization?.authorized ? (
                   <span className="inline-flex items-center gap-1 rounded-full bg-success/15 px-2.5 py-0.5 text-xs font-medium text-success">
                     <ShieldCheck className="h-3.5 w-3.5" aria-hidden="true" />
                     Authorized ({media.authorization.authorization_method})
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-warning/15 px-2.5 py-0.5 text-xs font-medium text-warning">
+                    <Info className="h-3.5 w-3.5" aria-hidden="true" />
+                    Preview Only
                   </span>
                 )}
               </div>
@@ -96,7 +101,7 @@ export function MediaPreviewCard({ media, onStartDownload, isSubmitting }: Media
                 </div>
               </dl>
 
-              {formats.length > 0 ? (
+              {media.downloadable !== false && formats.length > 0 ? (
                 <div className="grid gap-4 sm:grid-cols-2">
                   <div className="space-y-1.5">
                     <Label htmlFor="format-select">Available Format</Label>
@@ -129,9 +134,20 @@ export function MediaPreviewCard({ media, onStartDownload, isSubmitting }: Media
                   </div>
                 </div>
               ) : (
-                <p className="text-sm text-muted-foreground">
-                  No downloadable format options were returned for this media item.
-                </p>
+                <div className="rounded-lg border border-border bg-background-secondary p-3 text-sm text-muted-foreground">
+                  <p className="font-medium text-foreground">Preview available — direct download blocked</p>
+                  <p className="mt-1">
+                    {media.download_blocked_reason ||
+                      media.authorization?.reason ||
+                      'No downloadable format options were returned for this media item.'}
+                  </p>
+                  <p className="mt-2">
+                    Have your own exported or original video file?{' '}
+                    <a href="/converters" className="font-medium text-primary underline underline-offset-4">
+                      Open Media Converters
+                    </a>
+                  </p>
+                </div>
               )}
             </CardContent>
           </div>
@@ -140,7 +156,7 @@ export function MediaPreviewCard({ media, onStartDownload, isSubmitting }: Media
             <Button
               variant="primary"
               size="lg"
-              disabled={!selectedFormat || formats.length === 0}
+              disabled={media.downloadable === false || !selectedFormat || formats.length === 0}
               isLoading={isSubmitting}
               onClick={() => onStartDownload(selectedFormat, selectedQuality)}
             >

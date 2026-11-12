@@ -2,7 +2,7 @@ import axios, { AxiosError, type AxiosRequestConfig } from 'axios';
 import type { APIResponse } from '@/types/api';
 
 export const API_BASE_URL =
-  import.meta.env.VITE_API_BASE_URL?.replace(/\/+$/, '') || 'http://localhost:8080/api/v1';
+  import.meta.env.VITE_API_BASE_URL?.replace(/\/+$/, '') || '/api/v1';
 
 export class APIClientError extends Error {
   public readonly status: number;
@@ -67,9 +67,14 @@ apiClient.interceptors.response.use(
       return Promise.reject(new APIClientError('Request cancelled', 0, 'REQUEST_CANCELLED'));
     }
 
+    const fallbackMessage =
+      status === 0
+        ? 'Cannot reach the MediaDock API server. Make sure the backend (:8080) or Docker stack is running.'
+        : error.message || 'Network error while communicating with MediaDock API';
+
     return Promise.reject(
       new APIClientError(
-        error.message || 'Network error while communicating with MediaDock API',
+        fallbackMessage,
         status || 0,
         'NETWORK_ERROR',
       ),

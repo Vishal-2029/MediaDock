@@ -38,10 +38,11 @@ export interface AuthResponse {
   tokens: TokenPair;
 }
 
-export type PlatformID = 'instagram' | 'youtube' | 'facebook' | 'generic';
+export type PlatformID = 'instagram' | 'youtube' | 'facebook' | 'generic' | 'external';
 
 export interface AuthorizationResult {
   authorized: boolean;
+  preview_only?: boolean;
   authorization_method: string;
   account_identifier?: string;
   media_identifier?: string;
@@ -63,11 +64,14 @@ export interface MediaInspectResponse {
   source_id: string;
   provider: PlatformID;
   title: string;
+  media_type?: string;
   thumbnail_url?: string;
   duration: number;
   original_format: string;
   file_size: number;
   source_url: string;
+  downloadable?: boolean;
+  download_blocked_reason?: string;
   authorization: AuthorizationResult;
   available_formats: FormatOption[];
   created_at: string;
@@ -89,10 +93,13 @@ export interface MediaItemRecord {
   source_id: string;
   source?: MediaSourceRecord;
   title: string;
+  media_type?: string;
   thumbnail_url?: string;
   duration: number;
   original_format: string;
   file_size: number;
+  downloadable?: boolean;
+  download_blocked_reason?: string;
   created_at: string;
 }
 

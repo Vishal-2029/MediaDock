@@ -45,6 +45,16 @@ export const conversionService = {
 
   async downloadFile(id: string, fallbackName = 'converted-media'): Promise<void> {
     const res = await apiClient.get(`/conversions/${id}/file`, { responseType: 'blob' });
+    const contentType = String(res.headers['content-type'] || '');
+    if (contentType.includes('application/json')) {
+      const text = await (res.data as Blob).text();
+      const parsed = JSON.parse(text) as APIResponse<{ download_url?: string }>;
+      if (parsed.data?.download_url) {
+        window.open(parsed.data.download_url, '_blank', 'noopener,noreferrer');
+        return;
+      }
+    }
+
     const disposition = res.headers['content-disposition'] as string | undefined;
     const match = disposition?.match(/filename="([^"]+)"/);
     const filename = match?.[1] || fallbackName;

@@ -37,6 +37,13 @@ export function PlatformBadge({ provider, label }: PlatformBadgeProps) {
           {label || 'Direct Authorized Media'}
         </Badge>
       );
+    case 'external':
+      return (
+        <Badge variant="primary">
+          <Globe className="h-3.5 w-3.5" aria-hidden="true" />
+          {label || 'Licensed External Provider'}
+        </Badge>
+      );
     default:
       return (
         <Badge variant="default">
