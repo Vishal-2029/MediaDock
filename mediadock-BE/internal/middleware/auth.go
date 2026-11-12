@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"strings"
+	"time"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
@@ -67,15 +68,26 @@ func OptionalAuthOrGuest(authService *auth.Service) fiber.Handler {
 			}
 		}
 
-		guestID := auth.DefaultGuestUserID
-		if rawGuest := strings.TrimSpace(c.Cookies(auth.GuestCookieName)); rawGuest != "" {
-			if parsed, err := uuid.Parse(rawGuest); err == nil && parsed != uuid.Nil {
-				guestID = parsed
-			}
+		guestID, validGuest := authService.VerifyGuestCookie(c.Cookies(auth.GuestCookieName))
+		if !validGuest {
+			guestID = uuid.New()
 		}
 
 		if err := authService.EnsureGuestWorkspace(c.UserContext(), guestID); err != nil {
 			return utils.JSONError(c, fiber.StatusInternalServerError, "WORKSPACE_INIT_FAILED", "could not initialize guest workspace")
+		}
+
+		if !validGuest {
+			_, _, secure := authService.CookieSettings()
+			c.Cookie(&fiber.Cookie{
+				Name:     auth.GuestCookieName,
+				Value:    authService.SignGuestID(guestID),
+				Path:     "/",
+				Expires:  time.Now().UTC().Add(30 * 24 * time.Hour),
+				HTTPOnly: true,
+				Secure:   secure,
+				SameSite: fiber.CookieSameSiteLaxMode,
+			})
 		}
 
 		c.Locals(auth.ContextUserIDKey, guestID)

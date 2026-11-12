@@ -5,9 +5,11 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
+	"github.com/alicebob/miniredis/v2"
 	"github.com/mediadock/backend/internal/cache"
 	"github.com/mediadock/backend/internal/config"
 	"github.com/mediadock/backend/internal/database"
@@ -30,8 +32,20 @@ func main() {
 
 	db, err := database.ConnectPostgres(cfg.DatabaseURL, cfg.IsProduction())
 	if err != nil {
-		log.Error("failed to connect to PostgreSQL", "error", err.Error())
-		os.Exit(1)
+		if cfg.IsProduction() {
+			log.Error("failed to connect to PostgreSQL", "error", err.Error())
+			os.Exit(1)
+		}
+		devDBPath := filepath.Join(".", "storage_data", "mediadock-dev.db")
+		if cfg.StorageType == "local" && cfg.StoragePath != "" {
+			devDBPath = filepath.Join(cfg.StoragePath, "mediadock-dev.db")
+		}
+		db, err = database.ConnectDevSQLite(devDBPath)
+		if err != nil {
+			log.Error("failed to initialize PostgreSQL and local SQLite fallback", "error", err.Error())
+			os.Exit(1)
+		}
+		log.Warn("PostgreSQL unavailable in development mode; using local SQLite database", "path", devDBPath)
 	}
 
 	rootCtx, cancelRoot := context.WithCancel(context.Background())
@@ -44,8 +58,22 @@ func main() {
 
 	redisClient, err := cache.ConnectRedis(cfg.RedisURL)
 	if err != nil {
-		log.Error("failed to connect to Redis", "error", err.Error())
-		os.Exit(1)
+		if cfg.IsProduction() {
+			log.Error("failed to connect to Redis", "error", err.Error())
+			os.Exit(1)
+		}
+		mr, mrErr := miniredis.Run()
+		if mrErr != nil {
+			log.Error("failed to connect to Redis and embedded fallback failed", "redis_error", err.Error(), "fallback_error", mrErr.Error())
+			os.Exit(1)
+		}
+		defer mr.Close()
+		redisClient, err = cache.ConnectRedis("redis://" + mr.Addr() + "/0")
+		if err != nil {
+			log.Error("failed to connect to embedded Redis fallback", "error", err.Error())
+			os.Exit(1)
+		}
+		log.Warn("Redis unavailable in development mode; using embedded in-memory Redis", "addr", mr.Addr())
 	}
 	defer redisClient.Close()
 

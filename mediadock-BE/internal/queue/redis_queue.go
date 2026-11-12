@@ -2,10 +2,17 @@ package queue
 
 import (
 	"context"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -48,9 +55,10 @@ type WorkerQueue struct {
 	jobTimeout  time.Duration
 	maxRetries  int
 
-	mu       sync.RWMutex
-	handlers map[JobType]JobHandler
-	wg       sync.WaitGroup
+	mu          sync.RWMutex
+	handlers    map[JobType]JobHandler
+	wg          sync.WaitGroup
+	tokenKey    []byte
 }
 
 // NewWorkerQueue constructs a Redis-backed background job worker pool.
@@ -74,6 +82,65 @@ func NewWorkerQueue(redisClient *cache.RedisClient, log *slog.Logger, concurrenc
 	}
 }
 
+// SetTokenSecret configures AES-256-GCM encryption for ephemeral OAuth tokens stored in Redis payloads.
+func (q *WorkerQueue) SetTokenSecret(secret string) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if strings.TrimSpace(secret) == "" {
+		q.tokenKey = nil
+		return
+	}
+	sum := sha256.Sum256([]byte(secret))
+	q.tokenKey = sum[:]
+}
+
+func (q *WorkerQueue) encryptToken(plain string) (string, error) {
+	if plain == "" || len(q.tokenKey) == 0 || strings.HasPrefix(plain, "enc:v1:") {
+		return plain, nil
+	}
+	block, err := aes.NewCipher(q.tokenKey)
+	if err != nil {
+		return "", err
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return "", err
+	}
+	nonce := make([]byte, gcm.NonceSize())
+	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+		return "", err
+	}
+	sealed := gcm.Seal(nonce, nonce, []byte(plain), nil)
+	return "enc:v1:" + base64.StdEncoding.EncodeToString(sealed), nil
+}
+
+func (q *WorkerQueue) decryptToken(stored string) (string, error) {
+	if stored == "" || !strings.HasPrefix(stored, "enc:v1:") || len(q.tokenKey) == 0 {
+		return stored, nil
+	}
+	raw, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(stored, "enc:v1:"))
+	if err != nil {
+		return "", err
+	}
+	block, err := aes.NewCipher(q.tokenKey)
+	if err != nil {
+		return "", err
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return "", err
+	}
+	if len(raw) < gcm.NonceSize() {
+		return "", errors.New("corrupt encrypted token payload")
+	}
+	nonce, ct := raw[:gcm.NonceSize()], raw[gcm.NonceSize():]
+	plain, err := gcm.Open(nil, nonce, ct, nil)
+	if err != nil {
+		return "", err
+	}
+	return string(plain), nil
+}
+
 // RegisterHandler binds a handler function to a JobType.
 func (q *WorkerQueue) RegisterHandler(jobType JobType, handler JobHandler) {
 	q.mu.Lock()
@@ -83,12 +150,18 @@ func (q *WorkerQueue) RegisterHandler(jobType JobType, handler JobHandler) {
 
 // Enqueue pushes a job onto the Redis pending queue.
 func (q *WorkerQueue) Enqueue(ctx context.Context, jobType JobType, jobID uuid.UUID, ephemeralToken string) error {
+	q.mu.RLock()
+	encToken, err := q.encryptToken(ephemeralToken)
+	q.mu.RUnlock()
+	if err != nil {
+		return fmt.Errorf("encrypt ephemeral token: %w", err)
+	}
 	payload := JobPayload{
 		ID:         jobID,
 		Type:       jobType,
 		Attempt:    1,
 		MaxRetries: q.maxRetries,
-		Token:      ephemeralToken,
+		Token:      encToken,
 		EnqueuedAt: time.Now().UTC(),
 	}
 	return q.push(ctx, defaultQueueKey, payload)
@@ -158,6 +231,7 @@ func (q *WorkerQueue) workerLoop(ctx context.Context, workerID int) {
 func (q *WorkerQueue) ProcessOne(ctx context.Context, payload JobPayload) {
 	q.mu.RLock()
 	handler, ok := q.handlers[payload.Type]
+	decryptedToken, decErr := q.decryptToken(payload.Token)
 	q.mu.RUnlock()
 
 	if !ok {
@@ -166,11 +240,20 @@ func (q *WorkerQueue) ProcessOne(ctx context.Context, payload JobPayload) {
 		}
 		return
 	}
+	if decErr != nil {
+		if q.log != nil {
+			q.log.Error("failed to decrypt job token", "type", payload.Type, "job_id", payload.ID, "error", decErr.Error())
+		}
+		return
+	}
+
+	handlerPayload := payload
+	handlerPayload.Token = decryptedToken
 
 	jobCtx, cancel := context.WithTimeout(ctx, q.jobTimeout)
 	defer cancel()
 
-	err := handler(jobCtx, payload)
+	err := handler(jobCtx, handlerPayload)
 	if err == nil {
 		return
 	}

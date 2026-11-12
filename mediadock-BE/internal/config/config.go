@@ -34,11 +34,15 @@ type Config struct {
 	WorkerConcurrency    int
 	JobMaxRetries        int
 	AllowedOrigins       []string
+	TrustedProxies       []string
 	RateLimitMax         int
 	RateLimitWindow      time.Duration
 	InstagramGraphBase   string
 	InstagramAppID       string
+	InstagramAppSecret   string
 	InstagramAccessToken string
+	ExternalMediaAPIBase string
+	ExternalMediaAPIKey  string
 }
 
 // Load reads environment variables (optionally from a .env file in non-production)
@@ -102,12 +106,16 @@ func Load() (*Config, error) {
 		HistoryRetentionDays: parseIntEnv("HISTORY_RETENTION_DAYS", 90),
 		WorkerConcurrency:    parseIntEnv("WORKER_CONCURRENCY", 4),
 		JobMaxRetries:        parseIntEnv("JOB_MAX_RETRIES", 3),
-		AllowedOrigins:       splitCSV(getEnv("ALLOWED_ORIGINS", "http://localhost:3000")),
+		AllowedOrigins:       splitCSV(getEnv("ALLOWED_ORIGINS", "http://localhost:3000,http://localhost:5173,http://127.0.0.1:3000,http://127.0.0.1:5173")),
+		TrustedProxies:       splitCSV(os.Getenv("TRUSTED_PROXIES")),
 		RateLimitMax:         parseIntEnv("RATE_LIMIT_MAX", 100),
 		RateLimitWindow:      rateLimitWindow,
 		InstagramGraphBase:   strings.TrimRight(getEnv("INSTAGRAM_GRAPH_API_BASE", "https://graph.instagram.com"), "/"),
 		InstagramAppID:       os.Getenv("INSTAGRAM_APP_ID"),
+		InstagramAppSecret:   os.Getenv("INSTAGRAM_APP_SECRET"),
 		InstagramAccessToken: os.Getenv("INSTAGRAM_ACCESS_TOKEN"),
+		ExternalMediaAPIBase: strings.TrimRight(strings.TrimSpace(os.Getenv("EXTERNAL_MEDIA_API_BASE")), "/"),
+		ExternalMediaAPIKey:  strings.TrimSpace(os.Getenv("EXTERNAL_MEDIA_API_KEY")),
 	}
 
 	if cfg.LocalSigningSecret == "" {
@@ -131,6 +139,14 @@ func (c *Config) Validate() error {
 	}
 	if len(c.JWTSecret) < 32 {
 		return fmt.Errorf("JWT_SECRET must be at least 32 characters")
+	}
+	if c.IsProduction() {
+		if c.JWTSecret == "change-this-to-a-long-random-secret-at-least-32-chars" {
+			return fmt.Errorf("JWT_SECRET must not use the example placeholder in production")
+		}
+		if c.LocalSigningSecret == "change-this-signing-secret-in-production" {
+			return fmt.Errorf("LOCAL_SIGNING_SECRET must not use the example placeholder in production")
+		}
 	}
 	if c.StorageType != "local" && c.StorageType != "s3" {
 		return fmt.Errorf("STORAGE_TYPE must be 'local' or 's3', got %q", c.StorageType)

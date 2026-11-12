@@ -2,6 +2,9 @@ package auth
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
@@ -183,6 +186,42 @@ func (s *Service) EnsureGuestWorkspace(ctx context.Context, guestID uuid.UUID) e
 		guestID = DefaultGuestUserID
 	}
 	return s.users.EnsureGuestUser(ctx, guestID)
+}
+
+func (s *Service) guestSigningKey() []byte {
+	if s.cfg != nil && s.cfg.LocalSigningSecret != "" {
+		return []byte(s.cfg.LocalSigningSecret)
+	}
+	if s.cfg != nil && s.cfg.JWTSecret != "" {
+		return []byte(s.cfg.JWTSecret)
+	}
+	return []byte("mediadock-guest-fallback-signing-key")
+}
+
+// SignGuestID creates an HMAC-signed cookie value (<uuid>.<hex>) for an anonymous visitor workspace.
+func (s *Service) SignGuestID(guestID uuid.UUID) string {
+	mac := hmac.New(sha256.New, s.guestSigningKey())
+	mac.Write([]byte(guestID.String()))
+	return guestID.String() + "." + hex.EncodeToString(mac.Sum(nil))
+}
+
+// VerifyGuestCookie validates an HMAC-signed guest cookie and returns the embedded workspace UUID.
+func (s *Service) VerifyGuestCookie(raw string) (uuid.UUID, bool) {
+	parts := strings.SplitN(strings.TrimSpace(raw), ".", 2)
+	if len(parts) != 2 {
+		return uuid.Nil, false
+	}
+	id, err := uuid.Parse(parts[0])
+	if err != nil || id == uuid.Nil {
+		return uuid.Nil, false
+	}
+	mac := hmac.New(sha256.New, s.guestSigningKey())
+	mac.Write([]byte(id.String()))
+	expected := hex.EncodeToString(mac.Sum(nil))
+	if !hmac.Equal([]byte(expected), []byte(parts[1])) {
+		return uuid.Nil, false
+	}
+	return id, true
 }
 
 // GetMe returns the profile for the given user ID.
